@@ -1,0 +1,112 @@
+---
+title: "Untitled"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(nhanesA)
+library(tidyverse)
+```
+
+
+# STUDY 1 IDEAS
+
+A:
+
+B:Height vs. wanting to lose weight. 
+BMX_J and WHQ_J
+
+C:Height vs. Current Health status
+BMX_J and HSQ_J
+
+D:Smoking vs. Military History
+SMQ_J(SMQ020) and DEMO_J(DMQMILIZ) 
+
+E:Have little interest in doing things vs. How healthy is diet
+
+# STUDY 2 IDEAS
+
+Outcome of interest: Weight(BMX_J)
+
+Predictors: Eating Habits(DBQ_J(DBQ700))
+
+            My Plate Knowledge(DBQ_J(CBQ596))
+            
+            Meals Not Home Prepared(DBQ_J(DBD895))
+            
+            Money Spent at supermarket(CBQ_J(CBD071))
+            
+            Annual Household Income(DEMO_J(INDHHIN2))
+
+
+
+
+
+```{r}
+demo_raw <- nhanes('DEMO_J')
+bmx_raw <- nhanes('BMX_J')
+whq_raw <- nhanes('WHQ_J')
+hsq_raw <- nhanes('HSQ_J')
+smq_raw <- nhanes('SMQ_J')
+dpq_raw <- nhanes('DPQ_J')
+dbq_raw <- nhanes('DBQ_J')
+cbq_raw <- nhanes('CBQ_J')
+ocq_raw <- nhanes('OCQ_J')
+```
+
+```{r}
+temp1 <- left_join(demo_raw, bmx_raw, by = "SEQN")
+
+temp2 <- left_join(temp1, whq_raw, by = "SEQN")
+
+temp3 <- left_join(temp2, hsq_raw, by = "SEQN")
+
+temp4 <- left_join(temp3, smq_raw, by = "SEQN")
+
+temp5 <- left_join(temp4, dpq_raw, by = "SEQN")
+
+temp6 <- left_join(temp5, dbq_raw, by = "SEQN")
+dim(temp6)
+```
+
+```{r}
+saveRDS(temp6, file = "NHANES_study1.Rds")
+```
+
+
+```{r}
+temp1 <- left_join(demo_raw, dbq_raw, by = "SEQN")
+temp2 <- left_join(temp1, cbq_raw, by = 'SEQN')
+temp3 <- left_join(temp2, bmx_raw, by = "SEQN")
+temp4 <- left_join(temp3, ocq_raw, by = "SEQN")
+
+
+
+```
+
+```{r}
+dim(study2)
+```
+
+```{r}
+saveRDS(temp4, file = "NHANES_study2.Rds")
+```
+
+
+Notes from presentation:
+Study 1: Analysis B
+
+  Include units for measurements for description
+  
+  Remove legend from boxplot 
+
+Study2 : Make sure to use glance to describe model and assess r squared/nobs
+
+Study2 : Look at headings for study 2 from example and re header the study 2
+
+
+

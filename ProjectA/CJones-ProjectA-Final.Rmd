@@ -1,0 +1,780 @@
+---
+title: "Analysis of Educational and Social Factors on Suicide Rates"
+author: "Chris Jones"
+date: "`r Sys.Date()`"
+output: 
+  rmdformats::readthedown:
+    highlight: kate
+    number_sections: TRUE
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Reading in packages
+
+```{r, message = FALSE}
+library(ggrepel)
+library(glue)
+library(knitr)
+library(equatiomatic)
+library(broom)
+library(car)
+library(patchwork)
+library(janitor)
+library(magrittr)
+library(naniar)
+library(tidyverse)
+```
+
+# Ingest Data
+
+```{r, message = FALSE}
+data_url <- "https://www.countyhealthrankings.org/sites/default/files/media/document/analytic_data2021.csv"
+chr_2021_raw <- read_csv(data_url, skip = 1, guess_max = 4000)
+```
+# Data Development
+
+## Data Selection
+Here I am creating a subset of data that focuses on the states and variables that I am choosing to focus on. The states I have picked are Ohio, Wyoming, New Jersey, Alaska, Colorado, and Georgia. I have chosen these states in an attempt to be representative of states in terms of size as well as population. Wyoming and New Jersey were initially chosen because they are ranked the highest and lowest for the first variable I have chosen to look at, which is v161 (suicide rate). The total number of counties from these states is 376,
+
+I chose variables based on education and access to mental health in an attempt to look at any possible associations with suicide rate. These variables are v168(high school completion), v069(some college education), v062(mental health providers), and v140(social associations). Lastly I rename the variables accordingly and adjust the variables to be more readable. This will be explained in the code book.
+
+```{r}
+chr_2021 <- chr_2021_raw %>%
+  filter (county_ranked == 1) %>%
+  filter (state %in% c("OH", "WY", "NJ", "AK", "CO", "GA")) %>%
+  select (fipscode, state, county, 
+          v161_rawvalue,
+          v168_rawvalue,
+          v069_rawvalue,
+          v062_rawvalue,
+          v140_rawvalue) %>%
+  rename(suicide_rate = v161_rawvalue,
+         hs_completion = v168_rawvalue,
+         some_college = v069_rawvalue,
+         mh_providers = v062_rawvalue,
+         associations = v140_rawvalue) %>%
+  mutate(hs_completion = 100*hs_completion,
+         some_college = 100*some_college,
+         mh_providers = 10000*mh_providers)
+        
+```
+
+```{r}
+chr_2021 %>% tabyl(state) %>% adorn_pct_formatting()
+```
+A table to observe the spread of counties across the chosen states. A good variation, although Georgia does compromise large chunk at 42.3% of counties.
+## Reparing 'fipscode'
+
+```{r}
+chr_2021 <- chr_2021 %>%
+  mutate(fipscode = str_pad(fipscode, 5, pad= "0"),
+         state = factor(state))
+```
+
+Alters fipscode to be identified as a character. This will avoid confusion later on in the project.
+## Checking My Dataset
+
+Observing the newly formatted dataset. Shows total observations and rows, as well as data types for my variables. Also includes some of the first observations of the data.
+
+```{r}
+glimpse(chr_2021)
+```
+
+## Creating Binary and Multi-Categorical Variable
+
+I chose to create a binary variable out of mental health providers as a comparison of adequacy in access for an individual. The cutoff point was the median of all counties in the chr_2021_raw data set, and they will be labeled as above or below this median value. I also split social associations into a categorical variables based on bins after looking at the values within my data set. These bins each have a range of 5 up to 15 (only 2 counties are over 20 so last bin is everything above 15 to include these 2 values).
+
+```{r}
+mosaic::favstats(~ v062_rawvalue, data = chr_2021_raw)
+```
+
+Here I am using visuals to observe the distribution of my variable "associations". I use this information to determine good cutoff points in order to develop associations into a categorical variable. I observe a summary, followed by a histogram to plot the density of the number of associations, finally followed by a boxplot.
+
+```{r}
+mosaic::favstats(~ associations, data = chr_2021)
+```
+
+
+```{r}
+ggplot(chr_2021, aes(x = associations)) +
+  geom_histogram( aes(y=stat(density)),
+                 bins = 20, 
+                 fill = "blue", 
+                 color = 'red1') + 
+  theme_light() +
+  geom_line(stat="density",
+            col="red1",
+            lwd=1.25) +
+  labs(title = "Associations Histogram Distribution")
+```
+
+```{r}
+ggplot(chr_2021, aes(x="", y=associations)) +
+  geom_boxplot(width = 0.3,
+               fill = "blue") +
+  coord_flip() + 
+  theme_light() + 
+  labs(title = "Associations Boxplot Distribution")
+```
+Here I am actually creating the categorical variables.
+
+```{r}
+chr_2021 <- chr_2021 %>%
+  mutate(mh_providers_cat = cut(mh_providers, breaks = c(0, 11.9, Inf),
+                            labels = c("Below", "Above")),
+         assoc_cat = cut(associations, breaks = c(0, 5, 10, 15, Inf),
+                            labels = c("0-5", "5-10", "10-15", "15+")))
+```
+
+Finally I need to observe the categorical variables created to make sure each group has at least 10 observations.
+
+```{r}
+chr_2021 %>% tabyl(assoc_cat) %>% adorn_pct_formatting()
+```
+
+```{r}
+chr_2021 %>% tabyl(mh_providers_cat) %>% adorn_pct_formatting()
+```
+
+## Tibble Structure
+
+I am printing a structure of my tibble to make sure I still have all of my observations (376), I have my 10 variables, and my character, numerical, and factor variables are correct. 
+
+```{r}
+str(chr_2021)
+```
+
+# Codebook
+
+Most information drawn from this codebook is from the [County Health Ranking website] 
+
+Variable | Description
+---------- | -----------------------------
+fipscode | FIPS code
+state | State: chosen states are OH, WY, NJ, AK, CO, GA
+county | county name
+suicide_rate | age-adjusted suicide rate per 100,000 people (**Outcome**)
+hs_completion | Percentage of adults over 25 with high school diploma
+some_college | Percentage of adults 25-44 with some post-secondary education
+mh_providers | number of mental health providers per 10,000 people
+associations | Number of membership associations per 10,000 people
+mh_providers_cat | 2 levels: below = less than 11.9 per 100,000 above = greater than 11.9
+assoc_cat | 4 levels: 0-5, 5-10, 10-15, and 15+ membership associations 
+
+##Tibble Print
+
+```{r}
+chr_2021
+```
+A print of the tibble to confirm it is a properly structured tibble
+
+## Describe the Tibble
+
+```{r}
+Hmisc::describe(chr_2021)
+```
+## Missing Variables Check
+This check is just to ensure that my data is not missing more than 25% for any specific variable. The highest percentage missing is actually for my outcome which is 19.95%. This is under the 25% threshhold, however this will have to be noted when regarding validity of results. 
+
+```{r}
+chr_2021 %>%
+  miss_var_summary()
+```
+
+I am making the assumption that all missing values are a result of missingness completely at random. The data gathered for the County Health Rankings is assembled from many different types of data, and missingness across variables does not appear to be uniform. Based on this assumption, the analyses are going to be carried out using complete cases for the selected variables. 
+
+## Distinct Values Check
+
+A check is done to show that my data has a sufficient amount of distinct values. This is especially important for numerical data to show that I will have a sufficient range of data to analyze. As seen below, all variables have at least 300 unique values.
+
+```{r}
+chr_2021 %>%
+  summarize(across(suicide_rate:associations, ~n_distinct(.)))
+```
+## Categorical Variables Check
+
+```{r}
+chr_2021 %>% tabyl(mh_providers_cat)
+
+chr_2021 %>% tabyl(assoc_cat)
+```
+
+## Difficulties?
+
+In terms of the project as a whole, I believe the most difficult part was determining which variables to use. I spent a lot of time on this because I wanted the variables to make sense and be interesting to me. This was difficult because navigating the data for the County Health Records is very tedious with a large number of variables to choose from. I worked this out by starting with my outcome and deciding to pick a theme for some of my variables. The thought of education popped up and I decided to pick numerical rates associated with this. I also picked social factors as a means of displaying the influence of access itself. 
+
+## Save Data
+
+```{r}
+saveRDS(chr_2021, file = "chr_2021_chris_jones.Rds")
+```
+
+## Create variable for tibble
+
+```{r}
+chr_2021_cj <- read_rds("data/chr_2021_chris_jones.Rds")
+```
+
+# Analysis 1
+
+## The Variables
+
+Filtering the data for a simple linear regression analysis of two quantitative predictors. For this analysis, I will filter my data set to include the variables 'state', 'county', 'suicide_rate', and 'hs_completion'. State is the state the county is located in and county is the name of the county. 'Suicide_rate' is my chosen outcome, being the number of deaths from suicide per 100,000 population. Lastly, my chosen predictor is 'hs_completion', being the percentage of adults 25 and over with a high school diploma or equivalent. The chosen states of study are Ohio, Wyoming, New Jersey, Alaska, Colorado, and Georgia.
+
+```{r}
+chr_2021_a1 <- chr_2021_cj %>%
+  select(state, county, suicide_rate, hs_completion) %>%
+  filter(complete.cases(state, county, suicide_rate, hs_completion))
+```
+
+After filtering the data by the desired variables in complete cases, there is a total of 301 observations.
+
+Here I am displaying the information for Cuyahoga County, which includes a suicide rate per 100,000 people of 13.2 and a high school completion percentage of 89.8%.
+
+```{r}
+chr_2021_a1 %>%
+  filter(county == "Cuyahoga County")
+```
+## Research Question
+
+### Within the states of Ohio, Georgia, Alaska, Colorado, Wyoming, and New Jersey, are counties with higher levels of education associated with lower suicide rates?
+
+## Visualizing the Data
+
+First I am analyzing the distribution of my predictor and outcome in a scatterplot. 
+
+```{r}
+
+ggplot(chr_2021_a1, aes(x = hs_completion, y = suicide_rate)) + 
+  geom_point(shape = 1) + 
+  geom_smooth(method = "lm", formula = y ~ x, se = FALSE, col = "red",
+              linetype = "dashed") +
+  geom_smooth(method = "loess", se = FALSE,
+              col = "dodgerblue", formula = y ~ x) +
+  labs(title= "Scatterplot Suicide Rate versus High School Completion",
+       x = "Highschool Completion (%)",
+       y = "Suicide Rate (per 100,000)")
+```
+Based on the visual above, my initial reaction is that there is no clear apparent association. The data appears to be clustered towards the higher values of high school completion with lower rates of suicide. The plot on the left shows a scatter plot of highschool completion and suicide rate without any transformation, while the right plot shows the log transformation. When considering transformations, I observed the distribution of my outcome variable (suicide rate) along with a boxCox plot of my outcome and predictor. Based on the boxCox and the substantial right skew of my outcome variable, I decided on keeping a log transformation. 
+
+Here is the code observing the distribution of suicide rate before and after transformation. Although the upper tail still appears to be a bit heavy, I think this transformation is a lot better than the raw values.
+
+```{r}
+res <- mosaic::favstats(~ suicide_rate, data = chr_2021_a1)
+bin_w <- 3
+
+p1 <- ggplot(chr_2021_a1, aes(x = suicide_rate)) +
+  geom_histogram(binwidth = bin_w, fill = "palegreen",col="white") + 
+  stat_function(
+    fun = function(x) dnorm(x, mean = res$mean, 
+                            sd = res$sd) *
+      res$n * bin_w) +
+  labs(y="count")
+
+p2 <- ggplot(chr_2021_a1, aes(sample = suicide_rate)) +
+  geom_qq(col="palegreen") + 
+  geom_qq_line(linetype="dashed")
+
+res <- mosaic::favstats(~ log(suicide_rate), data = chr_2021_a1)
+bin_w <- .10
+
+p3 <- ggplot(chr_2021_a1, aes(x = log(suicide_rate))) +
+  geom_histogram(binwidth = bin_w, fill = "palegreen",col="white") + 
+  stat_function(
+    fun = function(x) dnorm(x, mean = res$mean, 
+                            sd = res$sd) *
+      res$n * bin_w)+
+  labs(y="count")
+
+p4 <- ggplot(chr_2021_a1, aes(sample = log(suicide_rate))) +
+  geom_qq(col="palegreen") + 
+  geom_qq_line(linetype="dashed")
+
+(p1+p2) /(p3 + p4) + plot_annotation(
+  title="Normal versus Log Transformation Distribution of Suicide Rate"
+)
+
+
+```
+
+
+```{r}
+
+boxCox(chr_2021_cj$suicide_rate ~ chr_2021_cj$some_college)
+```
+
+```{r}
+
+p1<-ggplot(chr_2021_a1, aes(x = hs_completion, y = suicide_rate)) + 
+  geom_point(shape = 1) + 
+  geom_smooth(method = "lm", formula = y ~ x, se = FALSE, col = "red",
+              linetype = "dashed") +
+  geom_smooth(method = "loess", se = FALSE,
+              col = "dodgerblue", formula = y ~ x) +
+  labs(title= "Scatterplot No Transformation",
+       x = "Highschool Completion (%)",
+       y = "Suicide Rate (per 100,000)")
+
+
+p2 <- ggplot(chr_2021_a1, aes(x = hs_completion, y = log(suicide_rate))) + 
+  geom_point(shape = 1) + 
+  geom_smooth(method = "lm", formula = y ~ x, se = FALSE, col = "red",
+              linetype = "dashed") +
+  geom_smooth(method = "loess", se = FALSE,
+              col = "dodgerblue", formula = y ~ x) +
+  labs(title= "Log transformation Scatterplot",
+       x = "Highschool Completion (%)",
+       y = "log(Suicide Rate (per 100,000))")
+
+p1+p2
+```
+
+Now that a transformation has been decided, my attention in the visualization is drawn to the outliers. I decided to research two points of interest, one with an extremely low high school completion and suicide rate, and one with an extremely high suicide rate.
+
+```{r}
+chr_2021_a1 %>% 
+  filter(hs_completion < 60 | suicide_rate > 120)
+```
+
+I decided to do some research in an attempt to identify why these counties have such dramatic values in comparison to the other counties. First, Kusilvak Census Area which is a county located in Alaska with by far the highest suicide rate among other counties. Based on the population demographics, I could not see any reason that required omitting it from the analysis. 
+
+The second county is Holmes County, located in Ohio. This county has the second highest population for an Amish community in the world (the first county is Lancaster County, Pennsylvania). 42% of the population for this county is Amish, with almost 90% giving their religion as Evangelical Protestant. I felt that this was a pretty unique demographic for a county that does not completely represent the large majority of counties within the United States, so I have decided to omit it from the analysis. 
+
+```{r}
+chr_2021_a1 <- chr_2021_a1 %>%
+  filter(hs_completion > 60)
+```
+
+
+## Fitted Model
+
+The plot below shows a tidied up version of the scatter plot with suicide rate and high school, along with an equation for a linear model. Based on the visualization below, high school completion does not appear to influence suicide rates within counties very much. Since the Pearson Correlation Coefficient is very low, this indicates a weak association between the log of suicide rate and high school completion
+
+```{r}
+raw_mod <- lm(suicide_rate ~ hs_completion, data = chr_2021_a1)
+
+mod <- lm(log(suicide_rate) ~ hs_completion, data = chr_2021_a1)
+
+ggplot(chr_2021_a1, aes(x = hs_completion, y = log(suicide_rate))) + 
+  geom_point(shape = 1) + 
+  geom_smooth(method = "lm", formula = y ~ x, se = FALSE, col = "red",
+              linetype = "dashed") +
+  geom_smooth(method = "loess", se = FALSE,
+              col = "dodgerblue", formula = y ~ x) +
+  annotate("text", x = 77, y = 4, color = "black", 
+           label = paste( "log(Suicide Rate) = ", round(signif(coef(mod)[1], 3), 2), " + ", 
+                          round(signif(coef(mod)[2],3), 3), "* (HS Completion)")) +
+  labs(title = "Association of Highschool Completion and Suicide Rate",
+       subtitle = glue("Pearson Correlation of Suicide Rate and HS Completion: {round(cor(log(chr_2021_a1$suicide_rate), chr_2021_a1$hs_completion), 3)}"),
+       x = "Highschool Completion (%)",
+       y = "log(Suicide Rate (per 100,000))")
+```
+
+This equation reads that for every percentage that high school completion increases, the estimated log of the suicide rate increases by 0.002. If the high school completion percentage for the county is 0, then the log of the suicide rate is 2.67. 
+
+```{r}
+extract_eq(mod, use_coefs = TRUE, coef_digits = 4, ital_vars = TRUE)
+```
+
+Here is a tidy summary of the linear model, including the term, the estimated coefficient, and the low and high of a 90% confidence interval for that coefficient. This indicates we are 90% confident that the true slope for high school completion is between -0.005 and 0.010. We are also 90% confident that the true intercept is between 2.035 and 3.308. 
+
+```{r}
+tidy(mod, conf.int = TRUE, conf.level = 0.90) %>%
+  select (term, estimate, conf.low, conf.high) %>%
+  kable(digits=3)
+```
+
+
+```{r}
+glance(mod) %>%
+  select(nobs, r.squared, adj.r.squared, sigma) %>%
+  kable (dig = 3)
+```
+The table above shows summary statistics for the model including nobs, r.squared, adj.r.squared, and sigma. After limiting to complete cases, the model is fit from 300 observations. The r squared and adjusted r squared attempt to explain the percent of variation that our model accounts for. As seen above, both values are nearly at 0 and indicate that the model accounts for less than 1% variation. Sigma is the residual standard error, which is a very wide margin considering the range of the log of the outcome. 
+
+
+## Residual Analysis
+
+Here is the residual analysis, assessing linearity as well as normality within the residuals. 
+
+The first plot displays a visualization of the fitted values versus the residuals. There is slight curve towards the middle to upper end of fitted values, however clustering of points mostly appears random. 
+
+```{r}
+augment(mod, data = chr_2021_a1) %>%
+  ggplot(., aes(x = .fitted, y = .resid)) +
+  geom_point(col = "purple") + 
+  geom_smooth(method = "loess", formula = y~ x, se = FALSE, col = "blue") + 
+  geom_smooth(method = "lm", formula = y~x, se = FALSE, col = "red", linetype = "dashed") +
+  labs(title ="Residuals vs. Fitted Values for Linear Model",
+       x = "Fitted", 
+       y = "Residuals")
+```
+The plot below shows two graphs assessing normality of the residuals. I do think that distribution of the residuals is almost normal, however there is a presence of heavier tails.
+
+```{r}
+chr_2021_a1_aug1 <- augment(mod, data = chr_2021_a1)
+
+p1 <- ggplot(chr_2021_a1_aug1, aes(sample = .std.resid)) + 
+  geom_qq(col = "purple") + 
+  geom_qq_line() +
+  ggtitle("Normal Q-Q")
+
+p2 <- ggplot(chr_2021_a1_aug1, aes(y = .std.resid, x = "")) +
+  geom_violin() + 
+  geom_boxplot(fill = "purple", width = 0.4, outlier.color = "purple",
+               outlier.size = 2) +
+  ggtitle("Boxplot")
+
+(p1 + p2) + plot_annotation(
+  title = "Normality of residuals for linear model",
+  subtitle = "Model = Suicide rate as an outcome of high school completion"
+)
+  
+```
+
+Below is a table displaying the models predicted outcome for Cuyahoga county along with the actual value and residual. 'Est_outcome' is the back transformation of the fitted value for that county based on our model. The model estimates overestimates Cuyahoga Counties suicide rate, showing a difference of around 4 suicides per 100,000 people. 
+
+```{r}
+augment(mod, data = chr_2021_a1) %>%
+  mutate(est_outcome = exp(.fitted)) %>%
+  select(state, county, est_outcome, suicide_rate) %>%
+  filter(county == "Cuyahoga County")
+```
+The table below shows the 2 counties with the largest residual values. Note that the information is for the transformed model where the fitted value and the observed value are viewed as log of the suicide rate. Both of these counties have a much higher observed value versus the fitted value.
+
+```{r}
+augment(mod, data = chr_2021_a1) %>% 
+  mutate(est_outcome = exp(.fitted)) %>%
+  select (state, county, .fitted, .resid, est_outcome, suicide_rate) %>%
+  slice_max(abs(.resid), n =2) 
+```
+
+
+```{r}
+p1 <- chr_2021_a1 %>%
+  slice(8)
+p2 <- chr_2021_a1 %>%
+  slice(12)
+
+augment(mod, data = chr_2021_a1) %>%
+  ggplot(., aes(x = .fitted, y = .resid)) +
+  geom_point() + 
+  geom_smooth(method = "loess", formula = y~ x, se = FALSE, col = "blue") + 
+  geom_smooth(method = "lm", formula = y~x, se = FALSE, col = "red", linetype = "dashed") +
+  geom_point(data = chr_2021_a1_aug1 %>%
+               filter(county =="Kusilvak Census Area"), col = "gold", size = 3) +
+  geom_point(data = chr_2021_a1_aug1 %>%
+               filter(county == "Northwest Arctic Borough"), col = "gold", size = 3) +
+  geom_text_repel(data = chr_2021_a1_aug1 %>%
+                    slice_max(abs(.resid), n =2), 
+                  aes(label=county)) +
+  labs(title = "Residual vs. Fitted Values",
+       subtitle = "Two points with largest absolute residuals identified",
+       x = "Fitted",
+       y = "Residuals")
+```
+
+## Conclusions and Limitations
+
+In this first analysis, the aim was to analyze if a decrease in education within a county is associated with higher suicide rates. Based on the linear model used, there is almost zero association between high school completion and suicide rates within a county. 
+
+Some limitations include the assumptions made on normality for the data. a log transformation on the outcome improved the normality of the distribution of suicide rate, however the data shows a fair amount of outliers and heavy tails. These factors would indicate higher standard deviation values than when compared to a normal model. Another limitation is the states chosen to be measured and whether they are representative of all of the counties in the United States. Alaska, for example, is a unique circumstance in regards to representation. While it is true that another state could have been chosen, it is also difficult to decide what accurate representation is of a county in the US is.
+
+# Analysis 2
+
+## The Variables
+
+Here I am creating the tibble to use for the second analysis, selecting complete cases of state, county, suicide_rate, and assoc_cat. As was the case for the previous analysis. Assoc_cat is the social associations measure separated by 4 groups. The number for the groups indicate the number of social associations available per 10,000 people. Baseline category for this analysis is '0-5'I will also exclude the outlier Holmes County. 299 observations for this data  set. 
+
+```{r}
+chr_2021_a2 <- chr_2021_cj %>%
+  select (state, county, suicide_rate, assoc_cat) %>%
+  filter(complete.cases(state, county, suicide_rate, assoc_cat))
+
+chr_2021_a2 <- chr_2021_a2 %>%
+  filter(county != "Holmes County")
+```
+
+Filtering the data set to show the information for Cuyahoga County. Cuyahoga County falls within the category of 5-10 social assocations per 10,000 people. 
+
+```{r}
+chr_2021_a2 %>%
+  filter(county == "Cuyahoga County")
+```
+
+## Research Question
+
+### Which grouping of number of social associations (0-5, 5-10, 10-15, or 15+) within a county is associated with the highest rates of suicide for counties in Ohio, New Jersey, Alaska, Colorado, Georgia, and Wyoming? 
+
+
+## Visualizing the Data
+
+Code below generates a group of box plots separated by number of social associations. 
+
+```{r}
+ggplot(chr_2021_a2, aes(x = assoc_cat, y = log(suicide_rate))) + 
+  geom_violin(fill = "burlywood1") + 
+  geom_boxplot(width = 0.4, fill = "brown1") +
+  labs(title = "Suicide Rates by Social Associations",
+       x = "# of Social Associations",
+       y = "log(Suicide Rate (Per 100,000))")
+
+```
+Based on this visualization it appears that there may be a case for counties with a number of social associations between 0-5 to have higher suicide rates than counties with higher numbers of social associations. 
+
+## Fitted Model
+
+Creating the fitted model with assoc_cat as the predictor and suicide rate still as the outcome. As was the same in analysis 1, a log transformation is applied to suicide rate. 
+
+```{r}
+mod2 <- lm(log(suicide_rate) ~ assoc_cat, data = chr_2021_a2)
+
+```
+
+Observing the distribution of observations for the categories. We can see a much larger number of observations within the two categories '5-10' and '10-15'
+
+```{r}
+chr_2021_a2 %>%
+  count(assoc_cat)
+```
+A tidy summary below shows the term, coefficient estimate, low and high for a confidence interval, and p value. Since our predictor is a category and not a continuous variable, this model will read the category that an observation is in as a binary and multiply it by that category's coefficient.
+
+```{r}
+tidy(mod2, conf.int = TRUE, conf.level = 0.90) %>%
+  select(term, estimate, conf.low, conf.high, p.value) %>%
+  kable(digits = 3)
+```
+
+```{r}
+extract_eq(mod2, use_coefs = TRUE, coef_digits = 4, ital_vars = TRUE)
+```
+
+The code above displays the full model. As an example, Cuyahoga County is in the assoc_cat of '5-10'. So log(suicide rate) = 3.2494 - 0.4553(1) - 0.3833(0) - 0.2907(0). We do not see the group '0-5' as this is the default, so just the intercept value contributes to the fitted value for this category. 
+
+Now we run an anova to test our hypothesis that one of the groups of social association has higher suicide rates. 
+Based on the results below, we can support the case that the social association category has some predictive value on the log of suicide rates. 
+
+```{r}
+anova(mod2)
+```
+Now that we have rejected our null hypothesis, we are going to assess pairwise comparisons of means to see if there is any significance in the difference of the groups. The table below shows the groups being compared, their estimate 
+
+```{r}
+tukey2<-tidy(TukeyHSD(aov(mod2), conf.level=0.90, ordered=TRUE))
+tukey2
+```
+```{r}
+ggplot(tukey2, aes(x = reorder(contrast, -estimate),
+                   y = estimate)) +
+  geom_pointrange(aes(ymin = conf.low, ymax = conf.high)) +
+  geom_hline(yintercept = 0, col = "red", linetype = "dashed") +
+  geom_label(aes(label = round_half_up(estimate, 1))) +
+  coord_flip() +
+  labs(title = "Estimated Effects, with Tukey HSD 90% Confidence Intervals",
+       subtitle = "Comparing Suicide Rates (per 100,000) by Social Associations",
+       x= "Estimated Effect",
+       y = "Constrast between social association groups")
+```
+
+
+## Prediction Analysis
+
+```{r}
+mod2_aug <- augment(mod2, chr_2021_a2)
+
+ggplot(mod2_aug, aes(x = .fitted, y = .resid)) +
+  geom_point() +
+  geom_smooth(method = "lm", formula = y~x, se = FALSE,
+              linetype = "dashed", col = "red") +
+  labs(title = "Residuals versus Fitted Values",
+       x= "Fitted",
+       y="Residuals")
+
+```
+```{r}
+mod2_oh <- mod2_aug %>%
+  filter ()
+
+ggplot(mod2_aug, aes(sample = .resid)) +
+  geom_qq() + 
+  geom_qq_line(col = "red") +
+  facet_grid(~ assoc_cat)
+
+ggplot(mod2_aug, aes(y = .resid, x = "")) +
+  geom_violin() +
+  geom_boxplot() + 
+  facet_grid(~ assoc_cat)
+```
+
+
+```{r}
+mod2_aug %>%
+  filter(county == "Cuyahoga County") %>%
+  mutate(est_outcome = exp(.fitted)) %>%
+  select(state, county, assoc_cat, .fitted, est_outcome, suicide_rate)
+```
+
+
+
+```{r}
+mod2_aug %>%
+  mutate(est_outcome = exp(.fitted)) %>%
+  slice_max(abs(.resid), n=2) %>%
+  select(state, county, assoc_cat, .fitted, suicide_rate, est_outcome )
+```
+
+## Conclusions and Limitations
+
+This analysis aimed to see whether a specific numbered group of social associations is associated with higher rates of suicide for a US county. As was the case for the previous analysis, a limitation is the chosen states being analyzed and whether they represent US counties. Another limitation specific for this analysis is the groupings chosen for the social associations variable. The cutoff points chosen for the groups did not result in a balanced number of observations as seen above. As such, It's more than likely that equal variance cannot be assumed.
+
+# ANALYSIS 3
+
+## The Variables
+
+Filtering the data set to our chosen variables and removing our outlier.
+
+```{r}
+chr_2021_a3 <- chr_2021_cj %>%
+  select(state, county, suicide_rate, hs_completion) %>%
+  filter(complete.cases(state, county, suicide_rate, hs_completion))
+
+chr_2021_a3 <- chr_2021_a3 %>%
+  filter(county != "Holmes County")
+```
+
+Observing the values for Cuyahoga County
+
+```{r}
+chr_2021_a3 %>%
+  filter(county == "Cuyahoga County")
+```
+
+## Research Question
+
+### Do counties with higher percentages of education have lower suicide rates when accounting for differences between states?
+
+## Visualization
+
+Performing an analysis similar to Analysis 1, except now we are stratifying by state to see if there is a difference in there association after accounting for the state. 
+
+```{r}
+
+ggplot(chr_2021_a3, aes(x = hs_completion, y = log(suicide_rate))) + 
+  geom_point(size = 2, aes(col = state)) + 
+  geom_smooth(method = "lm", formula = y ~ x, se = FALSE, col = "red",
+              linetype = "dashed", size = 1.5) +
+  geom_smooth(method = "loess", se = FALSE,
+              col = "dodgerblue", formula = y ~ x, size = 1.5) +
+  facet_wrap(~ state) +
+  labs(title = "Association of Highschool Completion and Suicide Rate by State",
+       x = "Highschool Completion (%)",
+       y = "log(Suicide Rate (per 100,000))")
+```
+The results of the visualization above show that most states do not appear to have a strong association between High school completion and the log of suicide rates. The most interesting state being observed is Alaska with a clear negative slope. 
+
+## Fitted Model
+
+First I am checking to make sure that our state variable is a factor. 
+
+```{r}
+is.factor(chr_2021_a3$state)
+```
+Releveling the state variable so that Ohio is the baseline.
+
+```{r}
+chr_2021_a3$state <- fct_relevel(chr_2021_a3$state, "OH")
+
+mod3 <- lm(log(suicide_rate) ~ hs_completion * state, data = chr_2021_a3)
+```
+
+
+Below is a tidy summary of the equation, showing the term, the coefficient, standard error, and the high and low for the confidence interval. This equation combines both a slope along with coefficients that add or subtract a value based on the binary value for that variable. For example, We would interpret Cuyahoga County as:
+
+log(suicide_rate) = 5.418 + hs_completion(Cuyahoga County) + 5.845(0) - 2.246(0) - 1.974(0) - 5.024 - 1.523(0). The other values indicate the coefficient for the slope of high school completion if the county is within that state. As mentioned before, Ohio is the baseline so only that slope applies.
+
+```{r}
+tidy(mod3, conf.int = TRUE, conf.level = 0.90) %>%
+  select(term, estimate, std.error, conf.low, conf.high) %>%
+  kable(dig = 3)
+
+```
+
+Our model is based on 300 observations, with an adjusted r. squared of 0.613 and a sigma of 0.259. This model makes a major improvement on the percent of variance explained, increasing by about 60%. 
+
+```{r}
+glance(mod3) %>%
+  select(nobs, r.squared, adj.r.squared, sigma) %>%
+  kable(dig = 3)
+```
+When the model accounts for state, we can now reject the null as there are detectable differences in the means between groups. When compared to our model in analysis 1, this model accounts for more variation and has significant values of difference when comparing states. 
+
+```{r}
+anova(mod3)
+```
+
+## Residual Analysis
+
+Our residual analysis for the model shows a pretty normal distribution. The scatterplot shows slight stratification and variation appears consistent across fitted values. 
+
+```{r}
+mod3_aug <- augment(mod3, chr_2021_a3)
+
+p1<-ggplot(mod3_aug, aes(x = .fitted, y = .resid)) +
+  geom_point(col = "mediumorchid") +
+  geom_smooth(method = "lm", formula = y~x, se = FALSE,
+              linetype = "dashed", col = "red") +
+  geom_smooth(method = "loess", formula = y~ x, se = FALSE, col = "blue") +
+  labs(x = "Fitted",
+       y = "Residuals") + 
+  ggtitle("Scatterplot")
+
+p2<-ggplot(mod3_aug, aes(sample = .resid)) +
+  geom_qq(col = "mediumorchid") + 
+  geom_qq_line(col = "red") +
+  ggtitle("Normal Q-Q")
+
+p3<-ggplot(mod3_aug, aes(y = .resid, x = "")) +
+  geom_violin(fill="mediumorchid") +
+  geom_boxplot(outlier.size = 2) + 
+  ggtitle("Boxplot")
+
+p1+p2+p3+plot_layout(widths = c(5,4,2)) + plot_annotation(
+  title = "Residual Linearity and Normality"
+)
+```
+
+Based on this linear model, Cuyahoga County's fitted value for suicide rate is 15.38. This is a much closer estimation when compared to the estimated suicide rate from the linear model that doesn't account for state differences.
+
+```{r}
+mod3_aug %>%
+  filter(county == "Cuyahoga County") %>%
+  mutate(est_outcome = exp(.fitted)) %>%
+  select(state, county, .fitted, est_outcome, suicide_rate)
+```
+Below the two values with the highest absolute residuals are displayed. With a model that now accounts for states, we see that the counties do not reside in Alaska. 
+
+```{r}
+mod3_aug %>% 
+  mutate(est_outcome = exp(.fitted)) %>%
+  slice_max(abs(.resid), n =2) %>%
+  select (state, county, .fitted, est_outcome, suicide_rate) 
+  
+```
+
+## Conclusions and Limitations
+
+Do counties with higher percentages of education have lower suicide rates when accounting for differences between states? Based on our model, some states show association of lower suicide rates for counties with a higher percentage of education. 
+
+A limitation in this analysis is the assumptions for regressions. Based on the visualization for the fitted values versus the residuals, there may be a case for assuming linearity, however it may be hidden due to the stratification. Another limitation is the number of counties within each state. Lower numbers of counties in Alaska and Wyoming may account for their results, which may reduce validity. This may also lead to us violating the assumption of variance used for the anova. However, it is hard to correct these disparities as we cannot alter the number of counties (nor the demographics of counties) within a state. 
+
+# Session Info
+
+```{r}
+sessionInfo()
+```
+
+
+

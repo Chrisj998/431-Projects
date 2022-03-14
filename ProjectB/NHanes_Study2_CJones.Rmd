@@ -1,0 +1,763 @@
+---
+title: "Using NHANES 2017-18 Data to Observe How Work Life Affects BMI"
+author: "Chris Jones"
+date: "`r Sys.Date()`"
+output: 
+  rmdformats::readthedown:
+    highlight: kate
+    number_sections: TRUE
+    code_folding: show
+    font-size: 14pt
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(comment = NA)
+```
+
+
+# Setup and Ingest
+
+```{r, message = FALSE}
+library(ggrepel)
+library(mosaic)
+library(equatiomatic)
+library(car)
+library(GGally)
+library(knitr)
+library(patchwork)
+library(haven)
+library(naniar)
+library(broom)
+library(janitor)
+library(magrittr)
+library(tidyverse)
+
+set.seed(20211206)
+```
+
+
+Ingesting study2 table that was developed in another RMarkdown file.
+
+
+```{r}
+study2_raw <- read_rds("data/NHANES_study2.Rds")
+```
+
+
+# Clean Data
+
+
+Filtered the raw table to only include desired variables and age group before cleaning individual variables. 
+
+```{r}
+study2_raw <- study2_raw %>%
+  select(SEQN, RIDAGEYR, RIDSTATR, BMXBMI, OCQ180, OCQ670, DBD895, CBD071, INDHHIN2) %>%
+  filter(complete.cases(.),
+         RIDAGEYR >= 18 & RIDAGEYR <= 65)
+```
+
+
+Before fully cleaning the data, I looked at numerical summaries of quantitative variables, as well as counts and proportions for categorical variables. The first table below shows some max values that are coded as a double value, however they actually represent individuals who either could not answer or refused to respond. For the sake of this analysis, these values are going to be coded as missing, and missingness is assumed to be completely at random. For this reason, a complete case analysis will be performed.
+
+```{r}
+df_stats(~ BMXBMI + OCQ180+DBD895+CBD071, data = study2_raw)
+```
+
+Table below shows counts and percents for the categorical variable `OCQ670`. This variable corresponds to overall work schedule for the past 3 months.  **Note** that 7 and 9 are to be counted as missing values. 
+
+```{r}
+study2_raw %>% tabyl(OCQ670)
+```
+
+Table below shows counts and percents for the categorical variable `INDHHIN`. This is a categorical value for income. I don't like how many levels there are for this category, so I will plan on collapsing it to 4 levels. **Note** that 77 and 97 are to be counted as missing values. INDHHIN2 values of 12 are not specific enough to be grouped into a category, so these observations are going to be removed as well. 
+
+
+```{r}
+study2_raw %>% tabyl(INDHHIN2)
+```
+
+
+In the code below, I am performing all of the necessary cleaning required for the data set. All labels are zapped from the variables and they are re-coded as either factors for categorical variables or doubles for quantitative variables. Categorical variables are relabelled to have meaningful levels, and all missing values are removed. For the `DBD895` variable, 5555 corresponds to values over 21. Since the actual value is unknown and this is a quantitative variable, these values were changed to the maximum value of 21. 
+
+```{r}
+
+study2 <- study2_raw %>%
+  mutate(zap_labels(study2_raw),
+         RIDAGEYR = as.double(RIDAGEYR),
+         RIDSTATR = as.factor(RIDSTATR),
+         BMXBMI = as.double(BMXBMI),
+         OCQ180 = as.double(OCQ180),
+         OCQ670 = as.factor(OCQ670),
+         OCQ670 = recode_factor(OCQ670,
+                                "1" = "9-5",
+                                "2" = "Nights",
+                                "3" = "Mornings",
+                                "5" = "Varied",
+                                "7" = "M",
+                                "9" = "M"), 
+         DBD895 = as.double(DBD895),
+         CBD071 = as.double(CBD071),
+         INDHHIN2 = as.factor(INDHHIN2),
+         INDHHIN2 = recode_factor(INDHHIN2, "1" = "Lowest", "2" = "Lowest", "3" = "Lowest", "4" = "Lowest", "13" = "Lowest",
+                                "5" = "Low", "6" = "Low", "7" = "Low",
+                                "8" ="High", "9" = "High", "10" = "High",
+                                "14" = "Highest", "15" = "Highest",
+                                "12" = "M",
+                                "77" = "M",
+                                "99" = "M")) %>%
+  filter(RIDSTATR == "2",
+         OCQ670 != "M",
+         INDHHIN2 != "M",
+         OCQ180 != 77777 & OCQ180 != 99999,
+         DBD895 != 9999,
+         CBD071 != 999999 & CBD071 != 777777)
+
+study2["DBD895"][study2["DBD895"] == 5555] <- 21
+study2 <- study2 %>% droplevels()
+```
+
+
+A summary table of all variables is ran to make sure data cleaning went okay. I am confirming that all variables are correctly coded, all values make sense, and that all missing values are removed. 
+
+
+```{r}
+Hmisc::describe(study2)
+```
+
+
+
+# Codebook
+
+`Study2` data set used for this analysis consists of 9 variables with 2335 complete case observations. The table below shows the variables, variable type as well as a description of the variable. `SEQN` is used as an identifier, along with `RIDSTATR` to see that all individuals in this data set performed the interview as well as examination. `RIDAGEYR` is included as a demographic measure to show that individuals in this analysis are aged 18-65. This leaves us with the outcome `BMXBMI`, the key predictor `CBD071`, and 4 additional predictors. Variables are identified as Quantitative, Binary, or Categorical. If categorical, number of categories is shown. The outcome and key predictor are identified, and variable descriptions are derived from NHANES descriptions along with the label meanings from the category. 
+
+Information obtained from [NHANES website](https://wwwn.cdc.gov/nchs/nhanes/continuousnhanes/default.aspx?BeginYear=2017)
+
+Variable | Type | Description
+---------- | ----- | ------------------
+SEQN | ID | Responder Sequence Number 
+RIDAGEYR | Quant | Age in years at screening (18-65)
+RIDSTATR | Binary | Identifies interview/examination status as 1 or 2
+BMXBMI | Quant | **(Outcome)** Patient BMI (kg/m2)
+OCQ180 | Quant | Hours worked last week
+OCQ670 | Cat: 4 | Overall work schedule for the past 3 months: 9-5, Mornings, Nights, or Varied
+DBD895 | Quant | Number of meals not home prepared during past 7 days
+CBD071 | Quant | **(Key Predictor)** Money spent at supermarket/grocery store during past 30 days ('$')
+INDHHIN2 | Cat: 4 | Annual household income ('$') (categorical). Numerical ranges are Lowest ( < 20,000), Low (20,000 - 44,999), High (45,000 - 74,999), and Highest (75,000+)
+
+
+Below is a numerical summary of the quantitative variables for the tibble. Total number of observations after cleaning data is 2335. DBD895 has the lowest number of distinct values at 21. Besides possibly the highest value for CBD071, all other values appear to be reasonable. I'm also going to recognize that some individuals in this data set have BMI's of over 60 which is exceptionally high, however I am also saying this is reasonable because of the prevalence of obesity in the United States as well as the severity of it. 
+
+
+## Analytic Table
+
+```{r}
+study2 %>%
+  select(BMXBMI, OCQ180, DBD895, CBD071) %>%
+  Hmisc::describe(.)
+```
+
+I noticed that one individual reported as spending $8,400 per month at the supermarket or grocery store. I wanted to look at the values for this individual because this equates to over 100,000 per year. I'm not denying the possibility of this, I just want to confirm that the income category that this individual belongs to also makes sense. They claim to be in the highest income bracket, so I will keep this observation within the data set. 
+
+```{r}
+study2 %>%
+  filter (CBD071 == 8400)
+```
+
+
+# Research Question:
+
+The data for this analysis is from the NHANES 2017-2018. All individuals within this study participated in both the survey as well as examination. This particular study looks at BMI as the outcome, along with 5 variables as predictors. I wanted to look at predictors that pertain to work and economic status. These predictors include hours worked last week, the overall work schedule for the past month, the number of meals not prepared at home in the past week, the annual household income group, and the amount of money spent at the supermarket/grocery store in the past month as a key predictor. Adult subjects were chosen from ages 18-65. Working status plays a large role in this study, so I wanted to pick individuals that are old enough to work, and not older than the typical age of retirement. 
+
+## Can we predict an individual's BMI by the amount of money spent at the supermarket/grocery store, and does adjusting for work/economic factors affect any potential association?
+
+
+# Partition Data
+
+Here I am going to partition the data set into a training and a test sample. The training sample will include a slice of 70% of the `study2` table, with the test set being the other 30%. Chosen seed was set earlier in setup as the date of expected presentation (2021-12-06).
+
+```{r}
+study2_train <- study2 %>%
+  slice_sample(., prop = .70)
+
+study2_test <- anti_join(study2, study2_train, by = "SEQN")
+```
+
+Looking at the dimensions of the study2 table to see number of observations. Also doing the same for the training set and the test set to ensure that they add up to total number in main set. 
+
+```{r}
+dim(study2)
+```
+
+```{r}
+dim(study2_train)
+```
+
+```{r}
+dim(study2_test)
+```
+
+Dimensions seem to line up, so everything looks good. I feel comfortable now moving through the analysis. 
+
+
+
+# Transforming the Outcome
+
+
+
+## Visualize Outcome Normal Distribution
+
+My first step is going to be to assess the distribution of the outcome. I want to see if anything looks strange and whether or not a transformation is possible for the outcome to better fit the assumption of normality for the linear model. I'm going to observe all applicable graphs, which include a histogram, a normal q-q plot, and a violin and boxplot.
+
+
+```{r}
+res <- mosaic::favstats(~ BMXBMI, data = study2_train)
+bin_w <- 1.5
+
+p1 <- ggplot(study2_train, aes(x = BMXBMI)) +
+  geom_histogram(binwidth = bin_w, 
+                 fill = "chocolate4", col = "white") +
+  stat_function(
+    fun = function(x) dnorm(x, mean = res$mean,
+                            sd = res$sd) *
+                  res$n * bin_w,
+                col = "red", size = 2) +
+  labs(title = "Normal Histogram",
+       x = "BMI",
+       y = "Count") +
+  theme_light()
+
+p2 <- ggplot(study2_train, aes(sample = BMXBMI)) +
+  geom_qq(col = "chocolate4") + 
+  geom_qq_line() +
+  labs(title = "Normal Q-Q plot") +
+  theme_light()
+
+p3 <- ggplot(study2_train, aes(x = "", y = BMXBMI)) +
+  geom_violin (fill = "chocolate4") + 
+  geom_boxplot(width = .425,
+               outlier.color = "red") + 
+  coord_flip() +
+  labs(title = "Boxplot with Violin",
+       y = "BMI") +
+  theme_light()
+
+p1 + p2 - p3 + plot_layout(ncol = 1, height = c(3,1)) +
+  plot_annotation(title = "NHANES 17-18 BMI Distribution")
+```
+Based on the visualization above, there appears to be a noticeable right skew. My initial thoughts are that a transformation of the outcome should be considered. Outliers do not seem to problematic to where a transformation can't fix normality. My Initial thoughts are that a log transformation may work out okay, however I will confirm these results later within the model using a boxCox plot.
+
+
+## Numerical Summary of Normal Outcome
+
+Numerical summary of the outcome shows nothing out of the ordinary. Again, BMI values in the 60s are extremely large, however this is definitely possible. For this training data set, we see a median BMI of 28.5 and a mean BMI 29.73(Which may in itself show a problem as 'normal weight' is considered 18.5 to 24.9, however I do also know that the concept of BMI is a bit dated).
+
+```{r}
+res
+```
+
+
+
+
+## Visualize Outcome Transformation 
+
+Below is a visualization of the transformation that was settled upon for the outcome. The boxCox plot actually recommends the inverse of the square root of the outcome, however I opted against this transformation because the results are almost uninterpretable within the regression model. Instead I looked at the log transformation, and I feel that it does not violate normality too much. There are a few outliers, however they are not very extreme, so I am going to keep this transformation and assume normality of the outcome. 
+
+```{r}
+res <- mosaic::favstats(~ log(BMXBMI), data = study2_train)
+bin_w <- 0.05
+
+p1 <- ggplot(study2_train, aes(x = log(BMXBMI))) +
+  geom_histogram(binwidth = bin_w, 
+                 fill = "chocolate1", col = "white") +
+  stat_function(
+    fun = function(x) dnorm(x, mean = res$mean,
+                            sd = res$sd) *
+                  res$n * bin_w,
+                col = "red", size = 2) +
+  labs(title = "Normal Histogram",
+       x = "BMI",
+       y = "Count") +
+  theme_light()
+
+p2 <- ggplot(study2_train, aes(sample = log(BMXBMI))) +
+  geom_qq(col = "chocolate1") + 
+  geom_qq_line() +
+  labs(title = "Normal Q-Q plot") +
+  theme_light()
+
+p3 <- ggplot(study2_train, aes(x = "", y = log(BMXBMI))) +
+  geom_violin (fill = "chocolate1") + 
+  geom_boxplot(width = .425,
+               outlier.color = "red") + 
+  coord_flip() +
+  labs(title = "Boxplot with Violin",
+       y = "BMI") +
+  theme_light()
+
+p1 + p2 - p3 + plot_layout(ncol = 1, height = c(3,1)) +
+  plot_annotation(title = "NHANES 17-18 BMI Distribution",
+                  subtitle = "Log transformation of BMI")
+```
+
+
+## Numerical Summary of Transformed Outcome
+
+Transformed numerical summary shows that the largest residual is about 3.5. This aids in the idea that the outliers are not very problematic. 
+
+```{r}
+res %>% kable (digits = 3)
+```
+
+
+## Numerical Summary of Predictors
+
+
+Below is a numerical summary of the predictors. These are separated into two tables, where one shows the two categorical variables and one shows the three quantitative predictors. The first table shows the number of levels and the distribution of the levels, with the second table showing a numerical summary of the distributions. All values appear reasonable and distribution of categories looks okay. 
+
+
+```{r}
+study2_train %>% select(-SEQN, -RIDSTATR, - RIDAGEYR, -BMXBMI) %>%
+  mosaic::inspect()
+```
+
+
+## Scatter Plot Matrix
+
+Below I am going to create two scatter plot matrices of the predictors to see how correlated they are with the outcome. The largest Perarson correlation coefficient is 0.067, which isn't a very strong correlation. 
+
+```{r}
+study2_train %>%
+  select(OCQ180, DBD895, CBD071, BMXBMI) %>%
+  ggpairs(., title = "Quantitative Scatterplot Matrix",
+          lower = list(combo = wrap("facethist", bins = 10)))
+```
+
+```{r}
+study2_train %>%
+  select(OCQ670, INDHHIN2, BMXBMI) %>%
+  ggpairs(., title = "Quantitative Scatterplot Matrix",
+          lower = list(combo = wrap("facethist", bins = 5)))
+```
+
+To aid in assessing the categorical variables, numerical summaries are shown fo the outcome across group levels of a categorical variable. Across `OCQ670`, `BMXBMI` distribution appears very similar, and all groups show a meaningful number of observations. 
+
+
+```{r}
+mosaic::favstats(BMXBMI ~ OCQ670, data = study2_train)
+```
+
+
+The table below shows `BMXBMI` distribution across `INDHHIN2` categories. The highest median and mean values are seen for the High category, however this is a very small difference from the next largest. Nothing seems to be of concern when looking at these numerical distributions. 
+
+```{r}
+mosaic::favstats(BMXBMI ~ INDHHIN2, data = study2_train)
+```
+
+## BoxCox Plot
+
+Using the model with all five predictors, performed a boxCox test to see whether a transformation is necessary for the outcome. The plot below recommends the inverse of the square root as a transformation, however this makes it very difficult to interpret so instead I will consider the log transformation. Since I kept the transformation, the visualization and discussion is above in the section on the outcome. 
+
+```{r}
+boxCox(lm(BMXBMI~OCQ180+OCQ670+DBD895+CBD071+INDHHIN2, data = study2_train))
+```
+
+
+# The Big Model
+
+## Fitting and Summarizing Big Model
+
+The first model that I'm going to look at fits all five predictors. This model (the 'big' model) will be compared later against a smaller model in predicting the test data set. 
+
+```{r}
+model1<-lm(log(BMXBMI) ~ OCQ180+OCQ670+DBD895+CBD071+INDHHIN2, data = study2_train)
+```
+
+
+
+## Effect Sizes: Coefficient Estimates
+
+Below is a tidy table showing coefficients and 90% confidence intervals for the big model. Estimate for this model is the predicted log of BMI when all other variables are 0. Estimates for quantitative variables are read as a slope, where each 1 change in *x* increases or decreases the log of BMI by the slope amount. Each estimate for the categorical variables is an addition or subtraction to the log of the BMI when they belong to that category. 
+
+Based on this model, when all variables are 0, the estimated log of BMI is 3.26 with 90% confidence interval(3.23, 3.32). Among these point estimates, estimates that are significant at the 10% level include OCQ180, OCQ670Mornings, and INDHHIN2High. For every hour spent working last week, with all other variables held constant, the log of BMI increases by 0.00132, with 90% confidence interval(0.0006, 0.002). If an individual identified as working mornings for the past 3 months, with all other variables held constant, then the log of BMI increases by 0.046 with 90% confidence interval (0.017, 0.075). Lastly, if in the High income bracket, with all oher variables held constant, the log of the BMI will increase by 0.081 with 90% confidence interval (0.048, 0.114).
+
+```{r}
+tidy(model1, conf.int = TRUE, conf.level = 0.90) %>%
+  select(term, estimate, std.error, conf.low, conf.high, p.value) %>%
+  kable(dig = 5)
+```
+
+
+
+## Big Model Equation Description
+
+Below is the full extracted equation of the big model, with the log of BMI as the outcome. 
+
+
+```{r}
+extract_eq(model1, use_coefs = TRUE, coef_digits = 3,
+           terms_per_line = 3, wrap = TRUE, ital_vars = TRUE)
+```
+
+This model reads that with all other quantitative variables kept at 0, the individual working 9-5, and belonging in the lowest income category, the log of BMI will be 3.28 . For every 1 increase in `OCQ180`, the log of BMI increases by 0.001. When belonging to the `OCQ670` group of 'morning' or 'varied, the log of BMI will increase, and `OCD670` group 'nights' will decrease the log of BMI. As `DBD895` increases, the log of BMI will increase, while the log of BMI will decrease as `CBD071` increases. Lastly, All other groups for `INDHHIN2` increase the log of BMI when compared to the 'lowest' group. All of these comparisons for the coefficients are interpretted when holding all other predictors constant. 
+
+
+# Smaller Model
+
+## Backwards Stepwise Elimination
+
+
+In an attempt to determine a better fit model, a backwards stepwise elimination was ran. 
+
+
+```{r}
+step(model1)
+```
+
+Based on the backwards stepwise elimination above, another recommended model is to drop the variable `DBD895`. The AIC of this smaller model only shows a decrease of 2. I am not convinced that I am going to see much of a difference between these models, so I am more interested in looking at just the key predictor as the smaller model.
+
+
+## Fitting Small Model
+
+The smaller model fit will only use the key predictor. This is the variable `CBD071`, or the amount of money spent at the supermarket/grocery store in the last 30 days.  
+
+```{r}
+model2 <- lm(log(BMXBMI) ~ CBD071, data = study2_train)
+```
+
+
+
+## Effect Sizes: Coefficient Estimates
+
+Tidy summary of the point estimates and 90% confidence intervals for the smaller model. Based on this model, when CBD071 is 0, the log of the BMI is estimated to be 3.38, with 90% confidence interval (3.36, 3.40). For every value that CBD071 increases, the log of BMI will decrease by 4e^5. At the 90% significance level, this point estimate is statistically significant. 
+
+```{r}
+tidy(model2, conf.int = TRUE, conf.level = 0.90) %>%
+  select(term, estimate, std.error, conf.low, conf.high, p.value) %>%
+  kable(dig = 5)
+```
+
+## Describing Small Model Equation
+
+
+```{r}
+extract_eq(model2, use_coefs = TRUE, coef_digits = 5,
+           terms_per_line = 3, wrap = TRUE, ital_vars = TRUE)
+```
+
+For every increase in dollar spent at the supermarket, the estimated log of BMI decreases by 4e^5. If spending 0 dollars at the supermarket, the estimated log of BMI is 3.38.
+
+
+# In-Sample Comparison
+
+
+In this section, I am going to compare the big model to the small model through assessing how well it fits the smaller test data that was partitioned from the original data set. 
+
+
+
+## Quality of Fit
+
+Each model is going to be compared on their fit quality through AIC, BIC, and adjusted r.squared. In order to do this, I need to create a glance table for the two models and bind them together for comparison. 
+
+```{r}
+temp1 <- glance(model1) %>%
+  select(-logLik, -deviance) %>%
+  mutate(modelname = "large")
+
+temp2 <- glance(model2) %>%
+  select(-logLik, -deviance) %>%
+  mutate(modelname = "small")
+
+training_comp <- bind_rows(temp1, temp2) %>%
+  select(modelname, nobs, df, AIC, BIC, everything())
+```
+
+The training comparisons are shown below. Both models display almost the same AIC, BIC, and adj.r.squared values. The smaller model has an AIC value of only around 1 lower, with a lower BIC by around 6. Adjusted r. squared values are almost the exact same, accounting for around 2.3% of the variance.
+
+```{r}
+training_comp
+```
+
+
+
+
+## Assessing Assumptions
+
+
+
+Here I am using the `augment` function to create residual plots. 
+
+```{r}
+aug1 <- augment(model1, data = study2_train)
+
+aug2 <- augment(model2, data = study2_train)
+```
+
+### Model 1 Residual Analysis
+
+Code below generates residual plots for the big model. The plots were created using ggplot and patchwork to combine them into one visualization.
+
+```{r}
+p1 <- ggplot(aug1, aes(x = .fitted, y = .resid)) +
+  geom_point() +
+  geom_abline(intercept = 0, slope = 0, lty = "dashed") +
+  geom_smooth(method = "loess", formula = y ~ x, se = FALSE) + 
+  geom_smooth(method = "lm", formula = y ~ x, col = "red", se = FALSE) +
+  geom_text_repel(data=aug1 %>% filter(.hat > 0.2),
+                  aes(label = SEQN), col = "red") +
+  labs(title = "Residuals vs. Fitted Values",
+       x = "Fitted Value for log(BMI)",
+       y = "Residual")
+
+p2 <- ggplot(aug1, aes(x = .fitted, y = sqrt(abs(.std.resid)))) +
+  geom_point() +
+  geom_smooth(method = "loess", formula = y ~ x, span = 2, se = F) + 
+  geom_text_repel(data=aug1 %>% filter(.hat > 0.2),
+                  aes(label = SEQN), col = "red") +
+  labs(title = "Scale Location Plot",
+       x = "Fitted Value for log(BMI))",
+       y = "Sqrt of |Standardized Residual|")
+
+p3 <- ggplot(aug1, aes(sample = .std.resid)) +
+  geom_qq() +
+  geom_qq_line(col = "red") +
+  labs(title = "Normal Q-Q",
+       x = "Standard Normal Quantiles",
+       y = "Standardized Residual")
+
+p4 <- ggplot(aug1, aes(x =.hat, y = .std.resid)) +
+  geom_point() +
+  geom_smooth(method = "loess", formula = y ~ x, se = F) +
+  geom_vline(aes(xintercept = 3*mean(.hat)), lty="dashed") +
+  geom_text_repel(data=aug1 %>% filter(.hat > 0.2),
+                  aes(label = SEQN), col = "red") +
+  labs(title = "Residuals Vs. Leverage",
+       x = "Leverage", y = "Standardized Residual")
+
+p1 + p2 + p3 + p4 + plot_annotation(title = "Residual analysis of Big Model")
+```
+
+The code above generates four residual plots to assess the regression assumptions. Plots created include the residuals vs. fitted values, scale location plot, normal q-q plot, and residuals vs. leverage. The residual vs. fitted plot appears to not have any distinct pattern, so I don't see any serious problems with non-linearity. The scale location plot looks good, with no clear reasons to think there is non-constant variance. The normal q-q plot fits well, and lastly we look at the residuals vs. leverage plot. There is one point with an unusually large leverage compared to the rest, so I identified it by SEQN number.
+
+### Model 2 Residual Analysis
+
+```{r}  
+p1 <- ggplot(aug2, aes(x = .fitted, y = .resid)) +
+  geom_point() +
+  geom_abline(intercept = 0, slope = 0, lty = "dashed") +
+  geom_smooth(method = "loess", formula = y ~ x, se = FALSE) + 
+  geom_smooth(method = "lm", formula = y ~ x, col = "red", se = FALSE) +
+  geom_text_repel(data=aug2 %>% filter(.hat > 0.2),
+                  aes(label = SEQN), col = "red") +
+  labs(title = "Residuals vs. Fitted Values",
+       x = "Fitted Value (1/sqrt(BMI)",
+       y = "Residual")
+
+p2 <- ggplot(aug2, aes(x = .fitted, y = sqrt(abs(.std.resid)))) +
+  geom_point() +
+  geom_smooth(method = "loess", formula = y ~ x, span = 2, se = F) +
+  geom_text_repel(data=aug2 %>% filter(.hat > 0.2),
+                  aes(label = SEQN), col = "red") +
+  labs(title = "Scale Location Plot",
+       x = "Fitted Value (1/sqrt(BMI))",
+       y = "Sqrt of |Standardized Residual|")
+
+p3 <- ggplot(aug2, aes(sample = .std.resid)) +
+  geom_qq() +
+  geom_qq_line(col = "red") +
+  labs(title = "Normal Q-Q",
+       x = "Standard Normal Quantiles",
+       y = "Standardized Residual")
+
+
+p4 <- ggplot(aug2, aes(x =.hat, y = .std.resid)) +
+  geom_point() +
+  geom_smooth(method = "loess", formula = y ~ x, se = F) +
+  geom_vline(aes(xintercept = 3*mean(.hat)), lty="dashed") +
+  geom_text_repel(data=aug2 %>% filter(.hat > 0.2),
+                  aes(label = SEQN), col = "red") +
+  labs(title = "Residuals vs. Leverage",
+       x = "Leverage", y = "Standardized Residual")
+
+
+p1 + p2 + p3 + p4 + plot_annotation(title = "Residual Analysis of Small Model")
+```
+
+The residual assessment for model 2 is shown above as well. In all plots except the normal q-q plot, a specific value can be seen with a much lower fitted value, but it is actually fit okay. In the residual vs. fitted value plot, This model may have problems with constant variance, where it appears that variance increases as fitted values increase. The unusual observation with high levrage has also been identified by the SEQN (sequence ID).
+
+
+
+### Identifying large leverage point
+
+Residual plots from both models above show a point with unusually large leverage. Although I am unsure whether I would be just in removing the point from analysis, I would at least like to identify and investigate it. 
+
+```{r}
+aug1 %>%
+  filter(SEQN == 101399)
+```
+
+This individual is actually the same observation from earlier with the unusually large amount of money spent at the supermarket/grocery store. He/She/They are a 41 year old individual that works 45 hours a week for a 9-5 and spends 8,400 dollars per month at the supermarket/grocery store. Since this amount is more than double the next previous person and means that they spend over 100,000 dollars, I would like to justify removing it from the analysis, however there are simply too many variables that could explain this possibility. This can tie into a further analysis that identifies why people spend their money at the supermarket, what they are buying, how many people reside in their household, etc. 
+
+
+
+
+
+# Model Validation
+
+## Prediction Errors
+
+### Model1 Back-Transformation
+
+In the code below, we are again using augment to apply model and fitted values to test data set. This is using the training data set to create a model and assessing how it fits to a test data set from the larger original data set. Note that model involved a log transformation of BMI so this is corrected by using the exp() function on the fitted value. Head of the table is shown to make sure values make sense. 
+
+```{r}
+aug1 <- augment(model1, newdata = study2_train) %>%
+  mutate(mod_name = "big",
+         bmi_fit = exp(.fitted),
+         bmi_res = BMXBMI - bmi_fit) %>%
+  select(SEQN, mod_name, BMXBMI, bmi_fit, bmi_res, everything())
+
+head(aug1, 5)
+```
+
+
+### Model2 Back-Transformation
+
+
+Same augmentation is applied to second smaller model. 
+
+
+```{r}
+aug2 <- augment(model2, newdata = study2_train) %>%
+  mutate(mod_name = "small",
+         bmi_fit = exp(.fitted),
+         bmi_res = BMXBMI - bmi_fit) %>%
+  select(SEQN, mod_name, BMXBMI, bmi_fit, bmi_res, everything())
+
+head(aug2, 5)
+```
+
+
+Augmentations of each model are combined into a test comparison table. 
+
+```{r}
+test_comp <- union(aug1, aug2) %>%
+  arrange (SEQN, mod_name)
+
+test_comp %>% head()
+```
+
+## Prediction Visualization
+
+Code below generates a visualization to compare predictions between the two models. 
+
+```{r}
+ggplot(test_comp, aes(x = bmi_fit, y = BMXBMI)) +
+  geom_point() + 
+  geom_abline(slope = 1, intercept = 0, lty = "dashed") +
+  geom_smooth(method = "loess", formula = y ~ x, se = F) + 
+  facet_wrap( ~ mod_name, labeller = "label_both") + 
+  labs(title = "Observed vs. Predicted for BMI",
+       subtitle = "Big Model(left) vs. Small Model(right)",
+       x = "Predicted BMI",
+       y = "Observed BMI",
+       caption = "Dashed line is where observed = predicted")
+```
+
+The visualization above shows a large discrepancy in the observed vs. predicted values for BMI between the two models. Since the smaller model only consists of one predictor with a negative slope, there is a very strict cut off point for maximum fitted BMI values.  
+
+
+Visualization below also looks at distribution of errors between each model. 
+
+```{r}
+ggplot(test_comp, aes(x = factor(mod_name), y = bmi_res, fill = mod_name)) +
+  geom_violin(alpha = 0.3) + 
+  geom_boxplot(width = 0.3, notch = TRUE) +
+  scale_x_discrete(position = "top",
+                   limits =
+                     rev(levels(factor(test_comp$mod_name)))) +
+  guides(fill = "none") +
+  coord_flip() +
+  labs(x = "",
+       y = "Prediction Errors on BMI")
+```
+
+However, distribution of errors for each model appear the same. 
+
+## Summarizing Errors
+
+
+Code below generates a table to summarize the errors for each model. These values will be meaningful in judging the quality of predictions on BMI made for each model. With each summary statistic, a lower value indicates lower prediction error, which means the model is better predictions. However, when looking at these values, they are almost identical across models. the big model displays slightly smaller MAPE, RMSPE, and max error. 
+
+```{r}
+test_comp %>%
+  group_by(mod_name) %>%
+  summarize(n = n(),
+            MAPE = mean(abs(bmi_res)),
+            RMSPE = sqrt(mean(bmi_res^2)),
+            max_error = max(abs(bmi_res)))
+```
+
+## Largest Errors
+
+
+Largest errors are identified for each model. As seen below, the largest error is the same observation for both models, with a BMI value of 65.3. The smaller model has a greater residual value by around 2 when compared to the big model. 
+
+```{r}
+temp1 <- aug1 %>%
+  filter(abs(bmi_res) == max(abs(bmi_res)))
+
+temp2 <- aug2 %>%
+  filter(abs(bmi_res) == max(abs(bmi_res)))
+
+bind_rows(temp1,temp2)
+```
+
+## R-square for Test Sample
+
+Code below generates the r-squared value within the test sample for each model. The big model has a much higher r. squared value (although still very low) of 0.024. The smaller model accounts for less than 1% of the variation in the test sample. 
+
+```{r}
+aug1 %$% cor(BMXBMI, bmi_fit)^2
+```
+
+```{r}
+aug2 %$% cor(BMXBMI, bmi_fit)^2
+```
+
+# Discussion
+
+## Chosen Model
+
+When comparing these two models, I think I would choose the larger model. The smaller model barely has smaller AIC and BIC values, however some glaring problems outweigh these values. The residual plots are very comparable between models, but the larger model seems better at predicting BMI values. It displays lower MAPE, RMSPE, and max error and makes more sense in fitting values. The smaller model shows a negative slope, and with only one predictor, this means it has a maximum BMI prediction value which isn't realistic. 
+
+## Research Question Answer
+
+Based on the large model, I do not think we are able to accurately predict BMI values based on the amount of money spent at the supermarket/grocery store, even when account for work and economic factors. 
+
+## Next Steps
+
+Another step that I would like to take this is by looking at different variables that relate to work factors. I also think it would be worth accounting for different confounders, such as age or US region that they live in. I think it would be extremely difficult to find a model that accounts for a large amount of variance in BMI values, however I do think there are better fit models out there. I would still like to look at how work pressures in the US affect an individuals overall health. 
+
+## Reflection
+
+With what I know, I would have changed my approach to study 2 by looking at the NHANES data and developing a focused research question. Developing a research question that is interpretable is difficult when you incorporate multiple variables that are seemingly unrelated. My original thoughts included more variables relating to nutritional knowledge and it felt difficult to develop a research question that I liked while including occupational variables. I also wouldn't be opposed to including variables that I could reasonably see are confounders. I think I tend to have a predisposition to like smaller models, and this analysis gave me insight as to why a simpler model is not always better to use. 
+
+# Session Info
+
+```{r}
+sessionInfo()
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+

@@ -1,0 +1,578 @@
+---
+title: "NHANES 2017-18 Analyses of Associations from Demographic, Examination, and Questionnaire Data"
+author: "Chris Jones"
+date: "`r Sys.Date()`"
+output: 
+  rmdformats::readthedown:
+    highlight: kate
+    number_sections: TRUE
+    code_folding: show
+    font-size: 14pt
+---
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(comment = NA)
+```
+
+
+# Setup and Data Ingest
+
+## Reading in Packages
+
+```{r, message = FALSE, warnings = FALSE}
+library(Epi)
+library(psych)
+library(mosaic)
+library(equatiomatic)
+library(car)
+library(GGally)
+library(knitr)
+library(patchwork)
+library(haven)
+library(naniar)
+library(broom)
+library(janitor)
+library(magrittr)
+library(tidyverse)
+
+source("data/Love-boost.R")
+```
+
+## Reading in Data set
+
+In another RMarkdown file, I had thought of the ideas for each study to decide which NHANES tables would need to be imported. I saved all necessary tables for that study as a data set and stored it in the data sub-folder. 
+
+```{r}
+study1_raw <- read_rds("data/NHANES_study1.Rds")
+```
+
+
+# Cleaning Data
+
+Using the NHANES website, I noted what variables I wanted from each table for each analysis and selected all of these variables. Lastly, I filtered by age to specify adults between the ages of 18 and 79. Age 80 was excluded as anyone over 80 was changed to 80. Ran dimensions of table to ensure at least 250 observations. 
+
+```{r}
+study1 <- study1_raw %>%
+  select(SEQN, RIDSTATR, RIDAGEYR, BMXHT, WHQ070, HSD010, SMQ020, DMQMILIZ, DPQ010, DBQ700) %>%
+  filter(RIDAGEYR >= 18 & RIDAGEYR < 80)
+
+dim(study1)
+
+```
+
+
+
+Looked at head of the study1 table to make sure it only includes specified variables. 
+
+
+
+```{r}
+head(study1)
+```
+
+
+Began data cleaning by removing the labels and then changing variables to factors for categorical variables or doubles for quantitative variables. I also recoded categorical values to have the level be a meaningful description as opposed to a number code. Descriptions are based on information from NHANES table information. Certain values for each variable specify an individual response as 'refused' or 'don't know', and were re-coded as "M" and later dropped when that variable is used for an analysis. 
+
+
+
+Here is the `RIDSTATR` and `RIDAGEYR` Demographic variables. 
+
+```{r}
+study1 <- study1 %>%
+  mutate(zap_labels(study1),
+         RIDSTATR = as.factor(RIDSTATR),
+         RIDAGEYR = as.double(RIDAGEYR)) %>%
+  filter(RIDSTATR == 2)
+```
+
+
+
+`BMXHT` as a double.
+
+```{r}
+study1 <- study1 %>%
+  mutate(BMXHT = as.double(BMXHT))
+```
+
+
+`WHQ070` with new meaningful levels of 'Yes' and 'No'.
+
+```{r}
+study1 <- study1 %>%
+  mutate(WHQ070 = as.factor(WHQ070),
+         WHQ070 = recode_factor(WHQ070, "1" = "Yes",
+                                "2" = "No"))
+```
+
+
+`HSD010` as a factor with new meaningful levels.
+
+
+```{r}
+study1 <- study1 %>%
+  mutate(HSD010 = as.factor(HSD010),
+         HSD010 = recode_factor(HSD010, "1" = "Excellent",
+                                "2" = "Very Good",
+                                "3" = "Good",
+                                "4" = "Fair",
+                                "5" = "Poor",
+                                "9" = "M"))
+```
+
+
+`SMQ020` as a factor with levels 'Yes' and 'No'.
+
+```{r}
+study1  <- study1 %>%
+  mutate(SMQ020 = as.factor(SMQ020),
+         SMQ020 = recode_factor(SMQ020, "1" = "Yes",
+                                "2" = "No"))
+```
+
+
+`DMQMILIZ` as a factor with new levels 'Yes', 'No' and 'M' for missing.
+
+```{r}
+study1 <- study1 %>%
+  mutate(DMQMILIZ = as.factor(DMQMILIZ),
+         DMQMILIZ = recode_factor(DMQMILIZ, "1" = "Yes",
+                                  "2" = "No",
+                                  "7" = "M",
+                                  "9" = "M"))
+```
+
+
+`DPQ010` as a factor with new meaningful levels.
+
+```{r}
+study1 <- study1 %>%
+  mutate(DPQ010 = as.factor(DPQ010),
+         DPQ010 = recode_factor(DPQ010, "0" = "Not at all",
+                                "1" = "Several days",
+                                "2" = "Over half",
+                                "3" = "Almost every day",
+                                "7" = "M",
+                                "9" = "M"))
+```
+
+
+Lastly, `DBQ700` with new meaningful levels.
+
+```{r}
+study1 <- study1 %>%
+  mutate(DBQ700 = as.factor(DBQ700),
+         DBQ700 = recode_factor(DBQ700,  "1" = "Excellent",
+                                "2" = "Very good",
+                                "3" = "Good",
+                                "4" = "Fair",
+                                "5" = "Poor",
+                                "9" = "M"))
+```
+
+A final look at the dimensions shows the number of observations to be 5151
+
+```{r}
+dim(study1)
+```
+
+
+I also ran a missing variable summary to observe variables with the highest amount of missing data. With a starting total of over 5000 observations, I should be okay. For all analyses in this study, I will assume missingness completely at random and do complete case analyses. 
+
+```{r}
+miss_var_summary(study1) %>%
+  kable (digits = 3)
+```
+
+
+
+# Codebook and Data Description
+
+## Codebook
+
+The `study1` data set consists of 10 variables and 5151 observations. Observations are adult individuals within the age range of 18-79. Columns are variable name, variable type, and a description. Variable name is the same name as provided by NHANES, type specifies quantitative or categorical(including how many categories). Description is based on NHANES description. All observations will be used with complete cases when used for analysis.
+
+Information obtained from [NHANES website](https://wwwn.cdc.gov/nchs/nhanes/continuousnhanes/default.aspx?BeginYear=2017)
+
+Variable | Type | Description
+--------- | ------ | ------------------
+SEQN | ID | Responder Sequence Number 
+RIDAGEYR | Quant | Age in years at screening (18-65)
+RIDSTATR | Binary | Identifies interview/examination status as 1 or 2
+BMXHT | Quan | Standing Height (cm)
+WHQ070 | Binary | Tried to lose weight in past year (Yes/No)
+HSD010 | Cat: 5 | General Health Condition scale 1(Excellent) to 5(Poor)
+SMQ020 | Binary | Smoked at least 100 cigarettes throughout life (Yes/No)
+DMQMILIZ | Binary | Served active duty in US Armed Forces (Yes/No)
+DPQ010 | Cat: 4 | Have little interest in doing things over last 2 weeks, ranging from 0(Not at all) to 3(Nearly every day)
+DBQ700 | Cat: 5 | How healthy is diet? Range from 1(Excellent) to 5(Poor)
+
+
+Summary of the table is ran. This shows that it is in fact a tibble, as well as number of observations and brief distribution statistics for each variable. Note that M is category that will be included as missing for specific analyses. 
+
+## Numerical Summaries
+
+Numerical summary of the variables for the table is ran. This lets me look at some important values to make sure that variables within this table are okay. In specific, I am looking at the number of observations, the number missing for the variable, the mean, lowest, and highest values for quantitative variables, and lastly the frequency and proportion of levels for categorical variables. This lets me make that all quantitative values make sense in regards to what is being measured, and that categorical variables have observations within all levels (Besides `RIDSTATR`)
+
+```{r}
+Hmisc::describe(study1)
+```
+
+# Analysis B: Comparison of Two Independent Means
+
+## Research Question
+
+This analysis will look to compare height versus wanting to lose weight last year. Comparison will be between the mean height (cm.) of individuals that tried to lose weight last year versus individuals that did not try to lose weight last year. These are independent samples, as it does not seem possible for an individual to answer both options. 
+
+### Are people who tried to lose weight last year shorter on average than people who did not try to lose weight last year?
+
+## Describe Data
+
+
+First, I filtered `study1` to only include the demographic variables as well as the two variables used in comparison, which are `BMXHT` and `WHQ070`.
+
+```{r}
+study1_b <- study1 %>%
+  filter(complete.cases(BMXHT, WHQ070)) %>%
+  select(SEQN, RIDSTATR, RIDAGEYR, BMXHT, WHQ070)
+```
+
+
+
+Summary statistics are shown for `BMXHT` across `WHQ070` groups, including standard deviation and number of observations. 
+
+```{r}
+mosaic::favstats(BMXHT ~ WHQ070, data = study1_b)
+```
+
+
+
+
+
+### Visualize Data
+
+Below is a violin and box plot comparing the two distributions of height. First I want to assess normality and variance  to determine which test will be used to compare means. Based on the visualization below, we can see very few minor outliers and the 'Yes' category might be slightly more right skew. However, there doesn't seem to be any glaring concerns. 
+
+```{r}
+ggplot(study1_b, aes(x = WHQ070, y = BMXHT, fill = WHQ070)) + 
+  geom_violin(alpha = 0.3) + 
+  geom_boxplot(width = 0.4, notch = TRUE) + 
+  coord_flip() + 
+  guides(fill = "none") + 
+  labs(title = "NHANES 17-18 Height Distribution by WHQ070",
+       subtitle = "n(Yes) = 1846, n(No) = 2556",
+       x = "Tried to Lose Weight Last Year",
+       y = "Height (cm.)")
+```
+
+
+
+Plot below assesses normality of height within groups. Only potential cause of concern are the slight tails that are shown in both graphs. However, . 
+
+```{r}
+ggplot(study1_b, aes(sample = BMXHT, col = WHQ070)) + 
+  geom_qq() + 
+  geom_qq_line(col = "black") + 
+  guides(fill = "none") + 
+  facet_wrap(~ WHQ070, labeller = "label_both") +
+  labs(y = "observed Height values (cm)") + 
+  theme_light()
+```
+
+
+
+Below provides a numerical summary to assess skew. For this analysis, values from -0.2 to 0.2 are considered to be okay when assessing skew. 
+
+```{r}
+study1_b %>% group_by(WHQ070) %>%
+  summarize(skew1 = round((mean(BMXHT) - median(BMXHT))/sd(BMXHT), 3))
+```
+
+
+
+
+psych tables were generated below to look at how far from normality the tails of these distributions are. With values of -0.35 and -0.52, I think it is safe to assume normality for these distributions. **Note** skew value from this table is ignored as nonparametric skew previously calculated is favored.
+
+```{r}
+study1_b_yes <- study1_b %>%
+  filter(WHQ070 == "Yes")
+
+psych::describe(study1_b_yes %>% select(BMXHT))
+```
+
+
+```{r}
+study1_b_no <- study1_b %>%
+  filter(WHQ070 == "No")
+
+psych::describe(study1_b_no %>% select(BMXHT))
+```
+
+
+## Main Analysis
+
+Based on the data description above, I think that some assumptions can be made that allow us to use the pooled t.test. First, I believe we are safe to assume independence due to nature of separation by WHQ070. I also believe we are safe to assume that each group represent's a random sample. Based on the visual analysis and skew value,  I feel safe assuming normality. Lastly, numerical summaries of distributions also seem safe in assuming both groups have equal variances. 
+
+Based on this, code below will use pooled t. test with a 90% confidence interval. Estimate is a comparison of No group minus Yes group. 
+
+```{r}
+t.test(BMXHT ~ WHQ070, data = study1_b, conf.level=.90, var.equal=TRUE) %>%
+  tidy() %>%
+  mutate(estimate = estimate1 - estimate2) %>%
+  select(estimate, conf.low, conf.high) %>%
+  kable(digits=3)
+```
+
+The mean height of those who tried to lose weight last year is 1.916 cm. lower than those that did not try to lose weight for this data. We are 90% confident the true difference mean difference in height is between -2.42 cm. and -1.411 cm. 
+
+## Conclusions 
+
+At the 10% significance level, based on this sample data from NHANES 17-18, there appears to be a statistically detectable difference in mean height for individual's that tried to lose weight versus individual that did not try to lose weight with an estimated mean difference at 1.916 cm. This was determined based on a pooled t. test in a complete case analysis. Based on visualizations presented above, this comparison appears to make sense as the distribution of height for individuals who tried to lose weight last year appeared slightly more right skewed. This result also supports my initial hypothesis that the mean height of those who tried to lose weight last year is lower. However, it should be noted that the statistically detectable difference is less than 2 cm. With mean heights around 166 cm for each group, this is a very small amount, and as far as I am concerned is negligible. 
+
+Further steps in this analysis would be to identify confounders and adjust for that. We could attempt to match genders as this is more than likely an impactful confounder. Women are generally shorter and may face more societal pressures for body image that cause them to want to lose weight. 
+
+
+
+# Analysis C: Comparing 3+ Means with ANOVA
+
+
+
+## Research Question
+
+The goal of this analysis is to compare `BMXHT` by `HSD010` groups, where `BMXHT` is an individuals height in cm. and `HSD010` is a self-reported response on how an individual's general health is. `HSD010` consists of 4 different levels, so this analysis will compare mean differences using an ANOVA. Individuals should not be linked across `HSD010` groups, so these should be independent samples. Specific pairwise comparisons will also be performed to determine which group, if any, display a statistically detectable mean difference in height versus other groups. 
+
+
+### Research Question: Do groups who rate their general health higher display a higher mean height than groups that rate their general health poor?
+
+## Describe Data
+
+My first step in describing the data for this analysis is to assess missing variables. I do this first to see if I will need to do a complete case analysis when later cleaning the data specific for this study. 
+
+```{r}
+miss_var_summary(study1)
+```
+
+
+I subset `study1` to a dataset consisting of only the appropriate variables, which include demographic information, `BMXHT`, and `HSD010`. I also filter by complete cases and answers that are considered missing. 
+
+
+```{r}
+study1_c <- study1 %>%
+  filter(complete.cases(BMXHT, HSD010),
+         HSD010 != "M") %>%
+  select(SEQN, RIDSTATR, RIDAGEYR, BMXHT, HSD010)
+
+study1_c <- study1_c %>% droplevels()
+```
+
+Table below shows the numerical distribution of height across groups of general health condition. From this table, I will mostly look at the standard deviation (sd) and mean to get an idea of variance. This will help in determining what type of test to perform later on when comparing means. All groups show very similar values, with the greatest different in mean being a bit over 3 and the greatest difference in standard deviation being less than one. All groups have a good amount of observations as well, with the lowest being 156. 
+
+```{r}
+mosaic::favstats(BMXHT ~ HSD010, data = study1_c)
+```
+
+
+
+Below is a visualization of the height distribution by general health condition groups. We can see a few minor outliers in the Poor and Very good category, and all groups appear relatively normal with constant variance as well. 
+
+```{r}
+ggplot(study1_c, aes(x = HSD010, y = BMXHT, fill = HSD010)) + 
+  geom_violin(alpha = 0.3) + 
+  geom_boxplot(width = 0.35, outlier.size = 2) + 
+  labs(title = "NHANES 17-18 Height Distribution by HSD010",
+       subtitle = "Box and Violin Plot") + 
+  coord_flip() +
+  guides(fill = FALSE) +
+  theme_light()
+```
+
+
+
+
+A further visualization below also shows distributions of height by general health groups. I think this also supports the idea that each group fits a relatively normal distribution. **Note:** Groups do not all have the same number of observations, and histograms have a free y axis. The poor and excellent categories display a lower number of observations when compared to the other two groups. 
+
+```{r}
+ggplot(study1_c, aes(x = BMXHT, fill = HSD010)) + 
+  geom_histogram(aes(fill = HSD010), col = "white") + 
+  facet_wrap(~ HSD010, labeller = "label_both", scales = "free_y") +
+  guides(fill = FALSE) +
+  labs(title = "NHANES 17-18 Height Distribution by HS010",
+       subtitle = "Histogram",
+       x = "Height (cm)")
+```
+
+## Main Analysis 
+
+
+
+### ANOVA
+
+For this analysis, I chose to do an analysis of variance because I believe this data fits the necessary assumptions. The p. value suggests there is a statistically detectable difference in means for the general health categories. However, this model accounts for less than 1% of variance for the outcome, which is height. 
+
+```{r}
+study1_c %$%
+  lm(BMXHT ~ HSD010) %>%
+  anova()
+```
+
+### Pairwise Comparison
+
+For the pairwise comparisons, I chose to apply a Holm correction. I wanted to apply a slightly more conservative approach, as well as account for the fact that this analysis features an unbalanced design with the number of observations for a group ranges from 165 to 2126. Code below generates a table displaying p. values for each comparison. We can observe 6 comparisons with a p. value less than 0.10.
+
+```{r}
+study1_c %$% pairwise.t.test(BMXHT, HSD010, p.adjust= "holm")
+```
+
+## Conclusions
+
+At the 10% significance level, we can observe that at least one of the groups displays a statistically different mean height when compared to other groups. The pairwise comparisons using a Holm correction show that 6 comparisons are statistically detectable. A difference in mean height is statistically detectable when comparing the Very Good group to Good, Fair, and Poor. Also, a difference in mean height is statistically detectable when comparing the Excellent category to the Good, Fair, and Poor category as well. This tells me that there may be an association between height and general health, as there is a statistically detectable difference when comparing mean heights of the better rated groups to the lower rated groups. I also wonder how this comparison would look if, for example, `HSD010` was collapsed into a binary variable, rating general health condition as either good or bad. These pairwise comparisons lead me to believe that there would be a statistically detectable difference as well. 
+
+
+# Analysis D: Two-Way Contingency Table
+
+
+## Research Question
+
+This analysis will look at the variables `DMQMILIZ` and `SMQ020`. `DMQMILIZ` observes whether an individual has been enlisted in the US Armed Forces and `SMQ020` looks at a history of smoking at least 100 cigarettes throughout lifetime. Both variables are binary categorical variables, grouping individuals by a 'yes' or 'no' answer. 
+
+### Do people who enlist in the US Armed Forces have higher odds of having a smoking history?
+
+## Describing Data
+
+As was the case with the other analyses, I am filtering the `study1` table to only include necessary variables. For this analysis, that includes `DMQMILIZ` and `SMQ020`. Also filter out missing values. 
+
+```{r}
+study1_d <- study1 %>%
+  filter(complete.cases(DMQMILIZ, SMQ020),
+         DMQMILIZ != "M")
+study1_d <- study1_d %>% droplevels()
+```
+
+
+
+Table looks at count of values across2x2 table. Number of observations looks good, with minimum amount being 291 and largest being 2974. 
+
+```{r}
+table(study1_d$DMQMILIZ, study1_d$SMQ020)
+```
+
+
+
+To avoid confusion with both factors being 'yes' and 'no', I altered the table to include a variable with groups that have meaningful names for the variables within the table. `DMQMILIZ` recoded as enlisted versus never enlisted, and `SMQ020` recoded as cigarette history versus no cigarette history.
+
+```{r}
+study1_d <- study1_d %>%
+  mutate(DMQMILIZ_d = fct_recode(DMQMILIZ,
+                                 "Enlisted" = "Yes",
+                                 "Never Enlisted" = "No"),
+         SMQ020_d = fct_recode(SMQ020,
+                               "Cigarette History" = "Yes",
+                               "No Cigarette History" = "No"))
+```
+
+
+Code below is showing the new table with meaningful labels. 
+
+```{r}
+study1_d %>% tabyl(DMQMILIZ_d, SMQ020_d)
+```
+
+## Main Analysis
+
+two by two analysis is performed below, displaying probability of having a cigarette history for each group, as well as a 90% confidence interval. Relative risks and odds ratios are also displayed, along with 90% confidence intervals for each estimate. The relative risk of having a cigarette history versus not having a cigarette history for people who have enlisted is 1.88, with 90% confidence interval (1.77, 2.00). The odds of having a cigarette history when being enlisted versus not being enlisted is 3.96, with 90% confidence interval (3.30, 4.75).
+
+
+```{r}
+d <- study1_d %$% table (DMQMILIZ_d, SMQ020_d)
+
+twoby2(d + 2, conf.level = 0.90)
+```
+
+## Conclusions
+
+
+
+At the 10% significance level, both the relative risk and the odds ratio are both statistically detectable. Based on this sample, people enlisted in the US Armed Forces have a 1.85 times the risk of having smoked 100 cigarettes throughout their lifetime versus those not enlisted. Also based on this sample, the odds of having smoked 100 cigarettes in your lifetime after being enlisted in the US Armed Forces is 3.76 times when compared to not being enlisted. When factoring in the magnitude of effect, both the relative risk and the odds ratio appear to be very strong. These results support the hypothesis that individuals enlisted in the US Armed Forces are more likely to have smoked 100 cigarettes in their lifetime. 
+
+Limitations to this study also include not addressing confounders. For example, I can see age being a large confounder due to increased knowledge on the damage that smoking does and as a result an increase in warning labels and people cautioning against smoking. There is also the potential that older individuals had more societal pressures to enlist in the Armed Forces. Futher studies could look at what goes into this relationship. It could be the case that smoking while enlisted is influenced by peer pressure and availability.
+
+
+
+
+
+# Analysis E: Larger Contingency Table
+
+
+
+
+## Research Question 
+
+In this analysis, I will at the association of two categorical variables, one with 4 levels and one with 5 levels. The analysis will look at `DPQ010` by `DBQ700`, which looks at having little interest in activities throughout the day by how healthy their diet is. `DPQ010` has four categories, ranging from 'Not at all' to 'Almost every day', whereas `DBQ700` has 5 groups ranging from 'Excellent' to 'Poor'. 
+
+
+### Are people with healthier diets more motivated throughout the day?
+
+## Describing Data
+
+
+Looking at summary of the variables that are going to be chosen for this analysis. 
+
+```{r}
+study1 %>% 
+  select(DPQ010, DBQ700) %>%
+  summary()
+```
+
+filtering out the main table to a specific table that only includes the two variables used for analysis, then getting rid of missing values. 
+
+```{r}
+study1_e <- study1 %>%
+  select(DPQ010, DBQ700) %>%
+  filter(complete.cases(DPQ010, DBQ700),
+         DPQ010 != "M" & DBQ700 != "M")
+
+study1_e <- study1_e %>% droplevels()
+```
+
+
+Generating a table of the two categorical variables and storing it. We can see a large degree of variation in terms of number of observations for each group. We can see the 'Good' and 'Not at all' group has 1454 observations, while the 'excellent' and 'over half' group only shows 11 observations. While this is true, this table still meets *Cochran conditions* since no cell has a count of 0, at least 80% of cells have a count of over 20, and expected counts for each cell are greater than 10.
+
+```{r}
+table_e <- study1_e %$% table(DPQ010, DBQ700)
+
+study1_e %>% 
+  tabyl(DPQ010, DBQ700) %>%
+  adorn_totals(where = c("row", "col"))
+```
+
+
+## Main Analysis
+
+For the main analysis, we will run the Pearson chi-squared test. Significant p. values from this test indicate that the alternative hypothesis is true, and there is an association between the two variables. The test below displays a p. value of 2.2e-16, suggesting that there is an association between `DPQ010` and `DBQ700`. 
+
+```{r}
+chisq.test(table_e)
+```
+
+
+Below is a Cohen-Friendly association plot that looks at association of specific comparisons. Rectangles begin at the base dashed line, and are represented by color depending on whether or not the observed frequency is greater or lower than expected, where red is lower and black is greater. Height of the rectangle is proportional to Pearson's chi-squared statistic, while with is proportional to the square root of the expected value for a cell. As such, the area of the rectangle represents the degree of deviation from the expected. 
+
+Based on this figure below, we can see a unique pattern where higher frequencies are observed for the combination of responses of a better diet and no lack of motivation, as well as a poor diet and severe lack of motivation. 
+
+```{r}
+assocplot(table_e)
+```
+
+## Conclusion 
+
+Based on the analysis above, there may be reason to believe there is an association between how healthy a diet is and degree of motivation throughout the day. Higher observed frequencies were present within the cells that support this hypothesis. Higher frequencies are observed where both diet is good and motivation is high, as well as where diet is poor and motivation is low. 
+
+The results to this analysis definitely make sense to me, however they may have been too expected. I think it is a safe assumption to think that individuals with greater motivation are more likely to eat healthy, since this decision in itself required motivation. This analysis also cannot look at which factor can be deemed the predictor and the outcome. Are people eating healthy because they are motivated, or are people motivated because they are eating healthy? This study could be added to by adding temporality and controlling diets to see how motivation changes. 
+
+# Session Information
+
+```{r}
+sessionInfo()
+```
+
